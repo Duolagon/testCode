@@ -1,0 +1,31 @@
+{
+  "ai": {
+    "provider": "gemini",
+    "model": "gemini-2.5-pro",
+    "maxTokens": 65536
+  },
+  "project": {
+    "exclude": [
+      "node_modules",
+      "dist",
+      "build",
+      ".git",
+      "coverage"
+    ]
+  },
+  "webui": {
+    "baseUrl": "http://localhost:3000",
+    "browser": "chromium",
+    "headless": true
+  },
+  "mcp": {
+    "configPath": null,
+    "timeout": 10000
+  },
+  "output": {
+    "dir": "./test-results",
+    "reportFile": "./test-report.md",
+    "screenshots": true
+  },
+  "interactive": false
+}
