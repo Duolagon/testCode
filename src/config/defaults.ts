@@ -30,6 +30,7 @@ export const defaultConfig: Config = {
     screenshots: true,
     videos: false,
     traces: false,
+    xmind: true,
   },
   retry: {
     maxAttempts: 2,
@@ -37,7 +38,29 @@ export const defaultConfig: Config = {
     retryAssertionErrors: true,
     retryTimeouts: false,
   },
+  coverage: {
+    enabled: false,
+    provider: 'v8',
+    thresholds: {
+      lines: 0,
+      branches: 0,
+      functions: 0,
+      statements: 0,
+    },
+  },
+  budget: {
+    maxTokens: 0,
+    confirmBeforeRun: false,
+    pricePerPrompt1k: 0,
+    pricePerCompletion1k: 0,
+  },
+  ci: {
+    enabled: false,
+    passRateThreshold: 80,
+    jsonReportPath: './test-results/report.json',
+  },
   interactive: true,
   mode: 'full',
+  specPath: null,
 };
 

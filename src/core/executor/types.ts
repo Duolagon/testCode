@@ -1,6 +1,13 @@
 import type { TestCategory, TestStatus } from '../../utils/constants.js';
 import type { AIClient, TokenUsage } from '../../services/ai-client.js';
 
+export interface CoverageSummary {
+  lines: { total: number; covered: number; pct: number };
+  branches: { total: number; covered: number; pct: number };
+  functions: { total: number; covered: number; pct: number };
+  statements: { total: number; covered: number; pct: number };
+}
+
 export interface TestResult {
   caseId: string;
   feature: string;
@@ -38,4 +45,15 @@ export interface ExecutionContext {
   aiClient?: AIClient;
   /** 重试配置 */
   retryConfig?: RetryConfig;
+  /** 覆盖率配置 */
+  coverageConfig?: {
+    enabled: boolean;
+    provider: 'v8' | 'istanbul';
+  };
+  /** WebUI 测试配置 */
+  webuiConfig?: {
+    browser: 'chromium' | 'firefox' | 'webkit';
+    headless: boolean;
+    timeout: number;
+  };
 }

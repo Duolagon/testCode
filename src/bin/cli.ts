@@ -5,6 +5,7 @@ import { handleRun, handleFullWorkflow } from '../commands/run.js';
 import { handleReport } from '../commands/report.js';
 import { handleInit } from '../commands/init.js';
 import { handleChat } from '../commands/chat.js';
+import { handleWeb } from '../commands/web.js';
 
 const program = new Command();
 
@@ -30,6 +31,10 @@ program
   .option('--model <model>', 'AI model to use')
   .option('--no-interactive', 'Skip interactive approval prompts')
   .option('--mode <mode>', 'Test mode (full|incremental)', 'full')
+  .option('--coverage', 'Enable code coverage collection')
+  .option('--ci', 'CI mode: JSON report output, exit code on failure')
+  .option('--budget <tokens>', 'Max token budget for this run')
+  .option('--spec <file>', 'Path to requirement document (enables requirement-driven mode)')
   .action(handleRun);
 
 program
@@ -42,12 +47,20 @@ program
 program
   .command('init')
   .description('Initialize ai-test configuration')
+  .option('--ci', 'Also generate GitHub Actions workflow file')
   .action(handleInit);
 
 program
   .command('chat')
   .description('Start the AI interactive REPL session')
   .action(handleChat);
+
+program
+  .command('web')
+  .description('Start the web UI for interactive testing')
+  .option('-p, --port <port>', 'Server port', '3456')
+  .option('--path <dir>', 'Target project path', '.')
+  .action(handleWeb);
 
 // 默认动作: 不带参数进入交互模式 (如果需要单次调用请使用具体的子命令如 run)
 program

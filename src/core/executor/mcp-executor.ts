@@ -7,6 +7,17 @@ import type { TestCase } from '../generator/types.js';
 import type { TestResult, ExecutionContext } from './types.js';
 import type { McpServerConfig } from '../analyzer/types.js';
 
+const MCP_OPERATION_TIMEOUT = 30_000; // 30s per MCP operation
+
+function withTimeout<T>(promise: Promise<T>, ms: number, operation: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`MCP operation "${operation}" timed out after ${ms}ms`)), ms),
+    ),
+  ]);
+}
+
 interface McpTestStep {
   action: 'list_tools' | 'call_tool';
   toolName?: string;
@@ -69,7 +80,7 @@ export async function executeMcpTest(
         env: server.env as Record<string, string> | undefined,
       });
       client = new Client({ name: 'ai-test-client', version: '1.0.0' });
-      await client.connect(transport);
+      await withTimeout(client.connect(transport), MCP_OPERATION_TIMEOUT, 'connect');
     } else {
       return {
         caseId: testCase.caseId,
@@ -85,7 +96,7 @@ export async function executeMcpTest(
     // Execute test steps
     for (const step of steps) {
       if (step.action === 'list_tools') {
-        const result = await client.listTools();
+        const result = await withTimeout(client.listTools(), MCP_OPERATION_TIMEOUT, 'list_tools');
         logs.push({ request: { action: 'list_tools' }, response: result, timestamp: Date.now() });
 
         if (step.expected?.toolNames) {
@@ -101,10 +112,11 @@ export async function executeMcpTest(
       } else if (step.action === 'call_tool') {
         if (!step.toolName) throw new Error('call_tool step missing toolName');
 
-        const result = await client.callTool({
-          name: step.toolName,
-          arguments: step.arguments ?? {},
-        });
+        const result = await withTimeout(
+          client.callTool({ name: step.toolName, arguments: step.arguments ?? {} }),
+          MCP_OPERATION_TIMEOUT,
+          `call_tool:${step.toolName}`,
+        );
         logs.push({
           request: { action: 'call_tool', toolName: step.toolName, arguments: step.arguments },
           response: result,

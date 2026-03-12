@@ -31,12 +31,15 @@ export class DevServerManager {
       );
     }
 
-    // Start server
-    const [cmd, ...args] = devCommand.split(' ');
+    // Start server - 使用 shell: false 防止命令注入
+    // 对于 npm/npx 命令安全拆分，其他命令保持兼容
+    const parts = devCommand.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [devCommand];
+    const cmd = parts[0];
+    const args = parts.slice(1).map(a => a.replace(/^["']|["']$/g, '')); // 去除引号包裹
     this.process = spawn(cmd, args, {
       cwd: this.projectPath,
       stdio: 'pipe',
-      shell: true,
+      shell: false,
       env: { ...process.env, PORT: String(port) },
     });
 

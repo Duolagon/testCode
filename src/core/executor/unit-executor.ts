@@ -1,24 +1,81 @@
 import * as path from 'node:path';
+import * as fs from 'node:fs/promises';
 import { spawnProcess } from '../../utils/process.js';
 import { FileService } from '../../services/file-service.js';
 import type { TestCase } from '../generator/types.js';
-import type { TestResult, ExecutionContext } from './types.js';
+import type { TestResult, ExecutionContext, CoverageSummary } from './types.js';
 import { shouldRetry, attemptSelfHeal } from './self-healing.js';
 
-function getRunnerCommand(testRunner: string | null): { command: string; args: (file: string) => string[] } {
+function getRunnerCommand(
+  testRunner: string | null,
+  coverageEnabled: boolean,
+  coverageProvider: string,
+): { command: string; args: (file: string) => string[] } {
   switch (testRunner) {
     case 'vitest':
-      return { command: 'npx', args: (file) => ['vitest', 'run', file, '--reporter=basic', '--silent'] };
+      return {
+        command: 'npx',
+        args: (file) => {
+          const baseArgs = ['vitest', 'run', file, '--reporter=default', '--silent'];
+          if (coverageEnabled) {
+            baseArgs.push('--coverage', `--coverage.provider=${coverageProvider}`, '--coverage.reporter=json-summary', '--coverage.reporter=text');
+          }
+          return baseArgs;
+        },
+      };
     case 'jest':
-      return { command: 'npx', args: (file) => ['jest', '--testPathPattern', file, '--silent'] };
+      return {
+        command: 'npx',
+        args: (file) => {
+          const baseArgs = ['jest', '--testPathPattern', file, '--silent'];
+          if (coverageEnabled) {
+            baseArgs.push('--coverage', '--coverageReporters=json-summary', '--coverageReporters=text');
+          }
+          return baseArgs;
+        },
+      };
     case 'mocha':
       return { command: 'npx', args: (file) => ['mocha', file, '--reporter=min'] };
     default:
-      // 使用 Node.js 内置 test runner
       return { command: 'node', args: (file) => ['--test', file] };
   }
 }
 
+/**
+ * 从 coverage-summary.json 中读取覆盖率数据
+ */
+async function readCoverageSummary(projectPath: string): Promise<CoverageSummary | undefined> {
+  const possiblePaths = [
+    path.join(projectPath, 'coverage', 'coverage-summary.json'),
+    path.join(projectPath, 'coverage', 'coverage-final.json'),
+  ];
+
+  for (const coveragePath of possiblePaths) {
+    try {
+      const raw = await fs.readFile(coveragePath, 'utf-8');
+      const data = JSON.parse(raw);
+      if (data.total) {
+        return {
+          lines: data.total.lines ?? { total: 0, covered: 0, pct: 0 },
+          branches: data.total.branches ?? { total: 0, covered: 0, pct: 0 },
+          functions: data.total.functions ?? { total: 0, covered: 0, pct: 0 },
+          statements: data.total.statements ?? { total: 0, covered: 0, pct: 0 },
+        };
+      }
+    } catch {
+      // 尝试下一个路径
+    }
+  }
+  return undefined;
+}
+
+/**
+ * 执行单个单元测试用例。
+ *
+ * 安全注意：AI 生成的测试代码在当前 Node.js 进程权限下运行，
+ * 拥有完整的文件系统和网络访问权限。在生产环境中应考虑使用
+ * 容器化沙箱（如 Docker）或受限用户权限来隔离测试执行。
+ */
 export async function executeUnitTest(
   testCase: TestCase,
   context: ExecutionContext,
@@ -27,14 +84,13 @@ export async function executeUnitTest(
   const start = Date.now();
 
   try {
-    // 将测试代码写入临时文件（现在在项目目录内，vitest 可以直接发现）
     const filename = `${testCase.caseId.replace(/[^a-zA-Z0-9-]/g, '_')}.test.ts`;
     const testFilePath = await fileService.writeTempFile(filename, testCase.testCode);
 
-    // 获取 test runner 命令
-    const runner = getRunnerCommand(context.testRunner);
+    const coverageEnabled = context.coverageConfig?.enabled ?? false;
+    const coverageProvider = context.coverageConfig?.provider ?? 'v8';
+    const runner = getRunnerCommand(context.testRunner, coverageEnabled, coverageProvider);
 
-    // 执行测试
     const result = await spawnProcess(runner.command, runner.args(testFilePath), {
       cwd: context.projectPath,
       timeout: 60_000,
@@ -73,10 +129,8 @@ export async function executeUnitTestWithRetry(
   context: ExecutionContext,
   fileService: FileService,
 ): Promise<TestResult> {
-  // 首次执行
   let result = await executeUnitTest(testCase, context, fileService);
 
-  // 判断是否需要自愈重试
   if (
     result.status === 'fail' &&
     context.aiClient &&
@@ -92,7 +146,6 @@ export async function executeUnitTestWithRetry(
     );
 
     if (healResult.wasFixed) {
-      // 用修复后的代码重新执行
       const retryResult = await executeUnitTest(
         healResult.fixedTestCase,
         context,
@@ -106,7 +159,6 @@ export async function executeUnitTestWithRetry(
       };
     }
 
-    // 所有修复尝试失败，返回原始结果 + 重试元数据
     return {
       ...result,
       retryAttempts: healResult.attempts,
@@ -117,3 +169,5 @@ export async function executeUnitTestWithRetry(
 
   return result;
 }
+
+export { readCoverageSummary };

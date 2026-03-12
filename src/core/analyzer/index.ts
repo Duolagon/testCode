@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import * as fs from 'node:fs/promises';
 import { readJsonFile } from '../../utils/fs.js';
 import type { Config } from '../../config/types.js';
 import type { ProjectInfo, FeatureEntry, FileEntry } from './types.js';
@@ -9,11 +10,79 @@ import { analyzeBackend } from './backend-analyzer.js';
 import { analyzeMcp } from './mcp-analyzer.js';
 import { getChangedFiles } from './diff-analyzer.js';
 
+/** 分析结果缓存路径 */
+const CACHE_FILE = '.ai-test-cache.json';
+
+interface AnalysisCache {
+  timestamp: number;
+  projectPath: string;
+  result: ProjectInfo;
+}
+
+/**
+ * 尝试从缓存加载分析结果（5 分钟内有效）
+ */
+async function loadCache(projectPath: string): Promise<ProjectInfo | null> {
+  try {
+    const cachePath = path.join(projectPath, CACHE_FILE);
+    const raw = await fs.readFile(cachePath, 'utf-8');
+    const cache: AnalysisCache = JSON.parse(raw);
+    const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+    if (
+      cache.projectPath === projectPath &&
+      Date.now() - cache.timestamp < CACHE_TTL &&
+      cache.result?.backend?.endpoints &&
+      cache.result?.frontend?.components &&
+      Array.isArray(cache.result.features)
+    ) {
+      // 确保反序列化后的数组字段完整
+      cache.result.backend.endpoints = cache.result.backend.endpoints ?? [];
+      cache.result.frontend.routes = cache.result.frontend.routes ?? [];
+      cache.result.frontend.components = cache.result.frontend.components ?? [];
+      cache.result.frontend.pages = cache.result.frontend.pages ?? [];
+      cache.result.mcp = cache.result.mcp ?? { servers: [] };
+      cache.result.mcp.servers = cache.result.mcp.servers ?? [];
+      cache.result.files = cache.result.files ?? [];
+      return cache.result;
+    }
+  } catch {
+    // 缓存不存在或无效
+  }
+  return null;
+}
+
+/**
+ * 保存分析结果到缓存
+ */
+async function saveCache(projectPath: string, result: ProjectInfo): Promise<void> {
+  try {
+    const cachePath = path.join(projectPath, CACHE_FILE);
+    const cache: AnalysisCache = {
+      timestamp: Date.now(),
+      projectPath,
+      result,
+    };
+    await fs.writeFile(cachePath, JSON.stringify(cache), 'utf-8');
+  } catch {
+    // 写缓存失败不影响主流程
+  }
+}
+
 export async function analyzeProject(
   projectPath: string,
   config: Config,
 ): Promise<ProjectInfo> {
   const absPath = path.resolve(projectPath);
+
+  // 尝试从缓存加载（仅 full 模式使用缓存，incremental 模式始终重新分析）
+  if (config.mode !== 'incremental') {
+    const cached = await loadCache(absPath);
+    if (cached) {
+      console.log('  使用缓存的分析结果（5 分钟内有效）');
+      return cached;
+    }
+  }
+
   const packageJson = await readJsonFile<Record<string, unknown>>(
     path.join(absPath, 'package.json'),
   );
@@ -36,24 +105,35 @@ export async function analyzeProject(
   if (config.mode === 'incremental') {
     const changedFiles = getChangedFiles(absPath);
     if (changedFiles.length > 0) {
-      // 检查 Feature 中是否有任何相关的前后端依赖处于修改范围内
-      // 使用相对宽松的检查方法，如果该 feature 相关的组件或 endpoint 所处的 source 参与了该次 Git 修改，就被保留
+      // 使用 Set 预处理变更文件，避免 O(features × changes) 复杂度
+      const changedSet = new Set(changedFiles.map(f => path.normalize(f)));
+      const changedBaseNames = new Set(changedFiles.map(f => path.parse(f).name));
+
       features = features.filter((feat) => {
-        const relatedPaths = [...feat.frontendComponents];
-        // 简单匹配：只要 changedFiles 里的路径包含了 feature 里面的某种定义即可
-        return changedFiles.some(change =>
-          relatedPaths.some(rp => change.includes(rp) || change.includes(path.parse(rp).name)) ||
-          feat.backendEndpoints.some(be => change.includes('controller') || change.includes('route'))
-        );
+        // 精确匹配：feature 关联的组件路径或文件名是否在变更列表中
+        const hasChangedComponent = feat.frontendComponents.some(rp => {
+          const normalized = path.normalize(rp);
+          return changedSet.has(normalized) || changedBaseNames.has(path.parse(rp).name);
+        });
+
+        // 后端 endpoint 关联的源文件是否变更
+        const hasChangedEndpoint = feat.backendEndpoints.some(be => {
+          const endpointInfo = backend.endpoints.find(e => `${e.method} ${e.path}` === be);
+          if (!endpointInfo) return false;
+          const normalized = path.normalize(endpointInfo.filePath);
+          return changedSet.has(normalized) || changedBaseNames.has(path.parse(endpointInfo.filePath).name);
+        });
+
+        return hasChangedComponent || hasChangedEndpoint;
       });
-      console.log(`  🔍 增量模式：发现 ${changedFiles.length} 个文件变更，过滤后涉及 ${features.length} 个功能点。`);
+      console.log(`  增量模式：发现 ${changedFiles.length} 个文件变更，过滤后涉及 ${features.length} 个功能点。`);
     } else {
-      console.log(`  🔍 增量模式：未发现文件变更，将跳过生成。`);
+      console.log(`  增量模式：未发现文件变更，将跳过生成。`);
       features = [];
     }
   }
 
-  return {
+  const result: ProjectInfo = {
     projectPath: absPath,
     packageJson,
     files,
@@ -63,6 +143,11 @@ export async function analyzeProject(
     features,
     detectedTestRunner,
   };
+
+  // 保存分析缓存
+  await saveCache(absPath, result);
+
+  return result;
 }
 
 function detectTestRunner(packageJson: Record<string, unknown> | null): string | null {

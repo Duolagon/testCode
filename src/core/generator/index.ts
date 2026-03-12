@@ -4,8 +4,10 @@ import type { TestCategory } from '../../utils/constants.js';
 import type { TestCase, GeneratedBatch } from './types.js';
 import type { AIClient } from '../../services/ai-client.js';
 import { createAIClient } from '../../services/ai-client-factory.js';
-import { buildPrompt, buildIntegrationPrompt } from './prompt-builder.js';
+import { buildPrompt, buildIntegrationPrompt, buildRequirementPrompt } from './prompt-builder.js';
 import { parseCases } from './case-parser.js';
+import type { RequirementSpec } from '../analyzer/requirement-parser.js';
+import { requirementToFeatures } from '../analyzer/requirement-parser.js';
 import * as p from '@clack/prompts';
 import { marked } from 'marked';
 import TerminalRenderer from 'marked-terminal';
@@ -145,6 +147,99 @@ export async function generateIntegrationCases(
     s.stop('集成测试用例生成失败 ❌');
     p.log.error(`错误: ${error instanceof Error ? error.message : String(error)}`);
     return { cases: [] };
+  }
+}
+
+/**
+ * 需求驱动模式的测试用例生成
+ * 从需求文档解析功能点，然后为每个功能点生成测试用例
+ */
+export async function* generateFromRequirement(
+  requirementSpec: RequirementSpec,
+  projectInfo: ProjectInfo,
+  config: Config,
+  existingClient?: AIClient,
+): AsyncGenerator<GeneratedBatch> {
+  const client = existingClient ?? await createAIClient(config);
+  p.log.info(`[需求驱动模式] 从需求文档解析到 ${requirementSpec.items.length} 个功能点`);
+  p.log.info(`使用 ${client.provider} 模型: ${client.model}`);
+
+  const features = requirementToFeatures(requirementSpec);
+
+  const cpuCount = os.cpus().length;
+  const concurrency = Math.max(1, Math.min(cpuCount, 10));
+  p.log.info(`启动动态并发引擎 (并发度: ${concurrency})`);
+  const limit = pLimit(concurrency);
+
+  const tasks: Array<{ feature: typeof features[0]; category: TestCategory }> = [];
+  for (const feature of features) {
+    for (const category of feature.applicableCategories) {
+      tasks.push({ feature, category });
+    }
+  }
+
+  const progressBar = new cliProgress.SingleBar({
+    format: '需求用例生成进度 | {bar} | {percentage}% || {value}/{total} 任务 || 当前: {currentTask}',
+    barCompleteChar: '\u2588',
+    barIncompleteChar: '\u2591',
+    hideCursor: true,
+  });
+
+  if (tasks.length > 0) {
+    progressBar.start(tasks.length, 0, { currentTask: '初始化...' });
+  }
+
+  const taskPromises = tasks.map(({ feature, category }) => limit(async () => {
+    progressBar.update({ currentTask: `${feature.name} [${category}]` });
+    try {
+      const prompt = await buildRequirementPrompt(feature, category, projectInfo, config);
+      let fullText = '';
+      let usage: any;
+
+      const stream = client.generateStream(prompt);
+      while (true) {
+        const { value, done } = await stream.next();
+        if (done) {
+          usage = value.usage;
+          break;
+        }
+        if (typeof value === 'string') {
+          fullText += value;
+        }
+      }
+
+      const cases = parseCases(fullText, feature.name, category, projectInfo.detectedTestRunner ?? 'vitest');
+
+      progressBar.increment();
+      return {
+        featureId: feature.id,
+        featureName: feature.name,
+        category,
+        cases,
+        usage,
+        success: cases.length > 0,
+      } as GeneratedBatch & { success: boolean };
+    } catch (error) {
+      progressBar.increment();
+      return {
+        featureId: feature.id,
+        featureName: feature.name,
+        category,
+        cases: [],
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      } as GeneratedBatch & { success: boolean; error?: string };
+    }
+  }));
+
+  for (const promise of taskPromises) {
+    const result = await promise;
+    yield result;
+  }
+
+  if (tasks.length > 0) {
+    progressBar.stop();
+    p.log.success('需求驱动测试用例生成完毕！');
   }
 }
 

@@ -30,6 +30,8 @@ export interface Config {
     screenshots: boolean;
     videos: boolean;
     traces: boolean;
+    /** 是否导出 XMind 格式的测试用例文件 */
+    xmind: boolean;
   };
   retry: {
     /** AI 修复最大尝试次数 */
@@ -41,7 +43,40 @@ export interface Config {
     /** 超时错误是否重试 */
     retryTimeouts: boolean;
   };
+  coverage: {
+    /** 是否启用代码覆盖率收集 */
+    enabled: boolean;
+    /** 覆盖率提供者: v8 或 istanbul */
+    provider: 'v8' | 'istanbul';
+    /** 最低通过率阈值（0-100），低于此值 CI 将失败 */
+    thresholds: {
+      lines: number;
+      branches: number;
+      functions: number;
+      statements: number;
+    };
+  };
+  budget: {
+    /** 单次运行最大 Token 预算，0 表示不限制 */
+    maxTokens: number;
+    /** 执行前是否显示成本预估并等待确认 */
+    confirmBeforeRun: boolean;
+    /** 每 1K prompt tokens 的价格（美元），用于成本估算 */
+    pricePerPrompt1k: number;
+    /** 每 1K completion tokens 的价格（美元） */
+    pricePerCompletion1k: number;
+  };
+  ci: {
+    /** CI 模式：输出 JSON 报告、设置退出码 */
+    enabled: boolean;
+    /** 最低通过率阈值（0-100），低于此值退出码非零 */
+    passRateThreshold: number;
+    /** JSON 报告输出路径 */
+    jsonReportPath: string;
+  };
   interactive: boolean;
   mode: 'full' | 'incremental';
+  /** 需求文档路径，设置后启用需求驱动模式 */
+  specPath: string | null;
 }
 

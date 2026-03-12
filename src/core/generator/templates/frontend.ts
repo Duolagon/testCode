@@ -43,12 +43,29 @@ Your output MUST be a valid JSON array of test case objects. Each object must ha
 ### 11. vi.mock() Hoisting
 - NEVER reference local variables inside \`vi.mock()\` factories because Vitest hoists them. E.g. \`const mockContent = ...; vi.mock('fs', () => ({ read: () => mockContent }))\` WILL CRASH. Use \`vi.mocked(...)\` instead or keep factories static.
 
+### 12. ESM Limitations
+- **CRITICAL**: In ESM (ECMAScript Modules), you CANNOT use \`vi.spyOn(module, 'export')\` on module namespace objects because they are not configurable. This includes Node.js built-in modules like \`path\`, \`fs\`, etc.
+- Instead, use \`vi.mock('module')\` to mock the entire module, then use \`vi.mocked(fn)\` to control individual exports.
+- **NEVER** do: \`vi.spyOn(path, 'resolve')\` — this WILL throw "Cannot redefine property".
+- **DO**: \`vi.mock('node:path', () => ({ resolve: vi.fn() }))\`
+
+### 13. Only Test Exported Functions
+- NEVER try to import internal/private functions that are not exported from the module.
+- If a function is not in the module's \`export\` statements, you CANNOT import it. Test it indirectly through the public API.
+
+### 14. Code Analysis Driven Testing
+- If a CODE ANALYSIS section is provided, you MUST generate tests that cover EVERY branch condition listed.
+- For each \`if\` condition, generate at least one test for the true path AND one for the false path.
+- For each \`throw\` / error path, generate a test that triggers that error.
+- For each null/undefined validation, generate a test with null/undefined input.
+
 Generate comprehensive test cases covering:
 - Component rendering (does it render correctly) — only if React/Vue/Angular is installed
 - Function/module logic testing (for non-UI projects)
 - State management (state changes correctly)
 - Edge cases (empty data, error states, loading states)
 - Props/input validation
+- ALL branch conditions identified in the Code Analysis section
 
 Output ONLY the JSON array, no markdown or explanation.`,
 

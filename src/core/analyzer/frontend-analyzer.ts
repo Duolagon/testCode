@@ -2,15 +2,17 @@ import * as path from 'node:path';
 import { readFileContent } from '../../utils/fs.js';
 import type { FileEntry, FrontendInfo, ComponentInfo } from './types.js';
 
-const FRAMEWORK_DEPS: Record<string, string> = {
-  next: 'next',
-  nuxt: 'nuxt',
-  'svelte-kit': '@sveltejs/kit',
-  react: 'react',
-  vue: 'vue',
-  svelte: 'svelte',
-  angular: '@angular/core',
-};
+// 检测顺序很重要：先检测更具体的框架（Next.js 依赖 React，Nuxt 依赖 Vue）
+// 必须先检测 next/nuxt/svelte-kit，再检测基础库 react/vue/svelte
+const FRAMEWORK_DEPS: [string, string][] = [
+  ['next', 'next'],
+  ['nuxt', 'nuxt'],
+  ['svelte-kit', '@sveltejs/kit'],
+  ['react', 'react'],
+  ['vue', 'vue'],
+  ['svelte', 'svelte'],
+  ['angular', '@angular/core'],
+];
 
 export async function analyzeFrontend(
   files: FileEntry[],
@@ -54,7 +56,7 @@ function detectFramework(packageJson: Record<string, unknown> | null): string | 
     ...(packageJson.devDependencies as Record<string, string> | undefined),
   };
 
-  for (const [name, dep] of Object.entries(FRAMEWORK_DEPS)) {
+  for (const [name, dep] of FRAMEWORK_DEPS) {
     if (deps[dep]) return name;
   }
 

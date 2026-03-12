@@ -13,20 +13,25 @@ export type ErrorCategory = 'syntax' | 'assertion' | 'timeout' | 'unknown';
 export function classifyError(errorDetail: string): ErrorCategory {
   const lower = errorDetail.toLowerCase();
 
-  // 语法 / 编译错误（esbuild / tsc）
-  if (
-    lower.includes('unterminated string literal') ||
-    lower.includes('syntax error') ||
-    lower.includes('transform failed') ||
-    lower.includes('unexpected token') ||
-    lower.includes('unexpected end of input') ||
-    lower.includes('cannot find module') ||
-    lower.includes('cannot access') ||
-    lower.includes('is not defined') ||
-    lower.includes('parse error') ||
-    lower.includes('expected expression') ||
-    lower.includes('is not a function')
-  ) {
+  // 语法 / 编译 / 导入错误
+  const syntaxPatterns = [
+    'unterminated string literal',
+    'syntax error',
+    'transform failed',
+    'unexpected token',
+    'unexpected end of input',
+    'cannot find module',
+    'cannot access',
+    'is not defined',
+    'parse error',
+    'expected expression',
+    'is not a function',
+    'module not found',
+    'cannot resolve',
+    'typeerror',
+    'referenceerror',
+  ];
+  if (syntaxPatterns.some(p => lower.includes(p))) {
     return 'syntax';
   }
 

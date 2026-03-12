@@ -3,7 +3,7 @@ import type { TestResult, ExecutionContext } from './types.js';
 import type { McpServerConfig } from '../analyzer/types.js';
 import { FileService } from '../../services/file-service.js';
 import { executeUnitTest, executeUnitTestWithRetry } from './unit-executor.js';
-import { executeWebUITest } from './webui-executor.js';
+import { executeWebUITestWithRetry, executeBatchWebUITests } from './webui-executor.js';
 import { executeMcpTest } from './mcp-executor.js';
 import { executeIntegrationTest } from './integration-executor.js';
 import { ResultCollector } from './result-collector.js';
@@ -61,12 +61,17 @@ async function executeSingleCase(
     case 'Performance':
       return executeUnitTestWithRetry(testCase, context, fileService);
     case 'WebUI':
-      return executeWebUITest(testCase, context, fileService);
+      return executeWebUITestWithRetry(testCase, context, fileService);
     case 'MCP':
       return executeMcpTest(testCase, context, mcpServers);
     default:
       return executeUnitTestWithRetry(testCase, context, fileService);
   }
+}
+
+export interface ExecutorOptions {
+  onResult?: (result: TestResult) => void;
+  silent?: boolean;
 }
 
 export async function executeTestCases(
@@ -75,6 +80,7 @@ export async function executeTestCases(
   fileService: FileService,
   mcpServers: McpServerConfig[],
   concurrency: number = DEFAULT_CONCURRENCY,
+  options?: ExecutorOptions,
 ): Promise<TestResult[]> {
   const collector = new ResultCollector();
 
@@ -92,15 +98,20 @@ export async function executeTestCases(
     }
   }
 
-  const progressBar = new cliProgress.SingleBar({
-    format: '执行测试用例 | {bar} | {percentage}% || {value}/{total} 任务 || 正在运行: {currentTask}',
-    barCompleteChar: '\u2588',
-    barIncompleteChar: '\u2591',
-    hideCursor: true
-  });
+  const silent = options?.silent ?? false;
+  const onResult = options?.onResult;
 
-  if (cases.length > 0) {
-    progressBar.start(cases.length, 0, { currentTask: '初始化...' });
+  let progressBar: cliProgress.SingleBar | null = null;
+  if (!silent) {
+    progressBar = new cliProgress.SingleBar({
+      format: '执行测试用例 | {bar} | {percentage}% || {value}/{total} 任务 || 正在运行: {currentTask}',
+      barCompleteChar: '\u2588',
+      barIncompleteChar: '\u2591',
+      hideCursor: true
+    });
+    if (cases.length > 0) {
+      progressBar.start(cases.length, 0, { currentTask: '初始化...' });
+    }
   }
 
   // 阶段 1: 并行执行独立测试
@@ -109,27 +120,47 @@ export async function executeTestCases(
       parallelCases,
       concurrency,
       (tc) => {
-        progressBar.update({ currentTask: tc.caseId });
+        progressBar?.update({ currentTask: tc.caseId });
         return executeSingleCase(tc, context, fileService, mcpServers);
       },
       (result) => {
         collector.add(result);
-        progressBar.increment();
+        progressBar?.increment();
+        onResult?.(result);
       },
     );
   }
 
-  // 阶段 2: 串行执行有共享资源的测试
-  if (serialCases.length > 0) {
-    for (const testCase of serialCases) {
-      progressBar.update({ currentTask: testCase.caseId });
-      const result = await executeSingleCase(testCase, context, fileService, mcpServers);
+  // 阶段 2: WebUI 测试 — 并发 context 加速（每批 3 个）
+  const webuiCases = serialCases.filter(tc => tc.category === 'WebUI');
+  const otherSerialCases = serialCases.filter(tc => tc.category !== 'WebUI');
+
+  if (webuiCases.length > 0) {
+    const webuiResults = await executeBatchWebUITests(
+      webuiCases,
+      context,
+      fileService,
+      3, // 3 个并发 browser context
+    );
+    for (const result of webuiResults) {
       collector.add(result);
-      progressBar.increment();
+      progressBar?.increment();
+      onResult?.(result);
     }
   }
 
-  if (cases.length > 0) {
+  // 阶段 3: 其他串行测试（MCP 等）
+  if (otherSerialCases.length > 0) {
+    for (const testCase of otherSerialCases) {
+      progressBar?.update({ currentTask: testCase.caseId });
+      const result = await executeSingleCase(testCase, context, fileService, mcpServers);
+      collector.add(result);
+      progressBar?.increment();
+      onResult?.(result);
+    }
+  }
+
+  if (cases.length > 0 && progressBar) {
     progressBar.stop();
   }
 
@@ -141,37 +172,45 @@ export async function executeIntegrationTests(
   context: ExecutionContext,
   fileService: FileService,
   concurrency: number = DEFAULT_CONCURRENCY,
+  options?: ExecutorOptions,
 ): Promise<TestResult[]> {
   const collector = new ResultCollector();
+  const silent = options?.silent ?? false;
+  const onResult = options?.onResult;
 
-  logger.heading('Integration Tests');
-  logger.info(`⚡ 并行执行 ${cases.length} 条集成测试用例 (concurrency=${concurrency})`);
+  if (!silent) {
+    logger.heading('Integration Tests');
+    logger.info(`⚡ 并行执行 ${cases.length} 条集成测试用例 (concurrency=${concurrency})`);
+  }
 
-  const progressBar = new cliProgress.SingleBar({
-    format: '执行集成测试用例 | {bar} | {percentage}% || {value}/{total} 任务 || 正在运行: {currentTask}',
-    barCompleteChar: '\u2588',
-    barIncompleteChar: '\u2591',
-    hideCursor: true
-  });
-
-  if (cases.length > 0) {
-    progressBar.start(cases.length, 0, { currentTask: '初始化...' });
+  let progressBar: cliProgress.SingleBar | null = null;
+  if (!silent) {
+    progressBar = new cliProgress.SingleBar({
+      format: '执行集成测试用例 | {bar} | {percentage}% || {value}/{total} 任务 || 正在运行: {currentTask}',
+      barCompleteChar: '\u2588',
+      barIncompleteChar: '\u2591',
+      hideCursor: true
+    });
+    if (cases.length > 0) {
+      progressBar.start(cases.length, 0, { currentTask: '初始化...' });
+    }
   }
 
   await runWithConcurrency(
     cases,
     concurrency,
     (tc) => {
-      progressBar.update({ currentTask: tc.caseId });
+      progressBar?.update({ currentTask: tc.caseId });
       return executeIntegrationTest(tc, context, fileService);
     },
     (result) => {
       collector.add(result);
-      progressBar.increment();
+      progressBar?.increment();
+      onResult?.(result);
     },
   );
 
-  if (cases.length > 0) {
+  if (cases.length > 0 && progressBar) {
     progressBar.stop();
   }
 

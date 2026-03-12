@@ -116,11 +116,26 @@ Your output MUST be a valid JSON array of test case objects. Each object must ha
 ### 11. vi.mock() Hoisting
 - NEVER reference local variables inside \`vi.mock()\` factories because Vitest hoists them. E.g. \`const mockContent = ...; vi.mock('fs', () => ({ read: () => mockContent }))\` WILL CRASH. Use \`vi.mocked(...)\` instead or keep factories static.
 
+### 12. ESM Limitations
+- **CRITICAL**: In ESM, you CANNOT use \`vi.spyOn(module, 'export')\` on module namespace objects. This includes \`path\`, \`fs\`, \`os\`, etc.
+- Use \`vi.mock('module')\` instead. NEVER \`vi.spyOn(path, 'resolve')\`.
+
+### 13. Only Test Exported Functions
+- NEVER try to import internal/private functions that are not exported.
+- Test private functions indirectly through the public API.
+
+### 14. Code Analysis Driven Testing
+- If a CODE ANALYSIS section is provided, you MUST generate tests that cover EVERY branch condition listed.
+- For each \`if\` condition, generate tests for both true and false paths.
+- For each error path (\`throw\`/\`catch\`), generate a test that triggers it.
+- For each validation check, generate tests with null/undefined/invalid inputs.
+
 Generate comprehensive test cases covering:
 - Happy path (valid inputs, expected outputs)
 - Parameter validation (missing/invalid params, wrong types)
 - Error handling (exceptions, edge cases)
 - Edge cases (empty inputs, null values, special characters)
+- ALL branch conditions identified in the Code Analysis section
 
 Output ONLY the JSON array, no markdown or explanation.`,
 

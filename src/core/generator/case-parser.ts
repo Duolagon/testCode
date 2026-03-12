@@ -45,16 +45,13 @@ function sanitizeJsonString(jsonStr: string): string {
     JSON.parse(sanitized);
     return sanitized;
   } catch {
-    // 策略 1: 修复 JSON string 内部的原始换行符
+    // 策略 1: 修复 JSON string 内部的原始换行符（单次遍历替换）
     let fixed = sanitized.replace(
       /"(?:[^"\\]|\\.)*"/g,
-      (match) => {
-        return match
-          .replace(/\r\n/g, '\\n')
-          .replace(/\r/g, '\\n')
-          .replace(/\n/g, '\\n')
-          .replace(/\t/g, '\\t');
-      }
+      (match) => match.replace(/\r\n|\r|\n|\t/g, (ch) => {
+        if (ch === '\t') return '\\t';
+        return '\\n';
+      }),
     );
 
     try {
@@ -120,10 +117,10 @@ function sanitizeJsonString(jsonStr: string): string {
 export function postProcessTestCode(testCode: string, testRunner: string): string {
   let processed = testCode;
 
-  // Bug 2 修复：替换 {{TEST_RUNNER}} 占位符
+  // 替换 {{TEST_RUNNER}} 占位符
   processed = processed.replace(/\{\{TEST_RUNNER\}\}/g, testRunner);
 
-  // 根因 A 修复：大模型在 JSON string 中使用了 \\n 双重转义
+  // 修复大模型在 JSON string 中使用了 \\n 双重转义
   const hasRealNewlines = processed.includes('\n');
   const hasLiteralBackslashN = processed.includes('\\n');
 
@@ -133,39 +130,44 @@ export function postProcessTestCode(testCode: string, testRunner: string): strin
       .replace(/\\t/g, '\t');
   }
 
-  // 根因 A2 修复已移除：正则表达式在跨行和匹配时导致了毁灭性的错误替换
-  // 现在完全依赖在 system prompt 中增加的 "String Escaping" 规则来防止此问题
-
-  // 根因 B 修复：vi.mocked(await import('...')) 在非 async 上下文中使用
-  // 这会导致 "await can only be used inside an async function" 错误
-  // 直接移除这种模式，因为正确的方式是在 vi.mock 中注册然后 import
+  // 修复单引号/双引号字符串中的裸换行符（JS/TS 中不允许跨行）
+  // AI 生成的 mock 数据经常包含多行字符串如 .mockReturnValueOnce('line1\nline2\n')
+  // 将跨行的普通字符串转为模板字面量，或将内部换行转义为 \\n
+  // 修复单引号/双引号字符串中的裸换行符（JS/TS 中不允许跨行）
+  // 将 \r\n、\r、\n 统一转义为 \\n
   processed = processed.replace(
-    /vi\.mocked\(await\s+import\(['"]([^'"]+)['"]\)\)/g,
-    (_match, _modulePath) => {
-      return `vi.mocked(readFileContent)`;
-    }
+    /(['"])([^]*?)\1/g,
+    (match, quote, content) => {
+      if (!content.includes('\n') && !content.includes('\r')) return match;
+      const fixed = content.replace(/\r\n|\r|\n/g, '\\n');
+      return `${quote}${fixed}${quote}`;
+    },
   );
 
-  // 根因 C 修复：mocked(xxx) → vi.mocked(xxx)
-  // 大模型 import { mocked } from 'vitest' 是旧版 API
-  // 替换独立的 mocked() 调用为 vi.mocked()
-  processed = processed.replace(
-    /(?<![.\w])mocked\(/g,
-    'vi.mocked('
-  );
-  // 移除对 mocked 的独立 import（已包含在 vi 中）
-  processed = processed.replace(
-    /,\s*mocked\b/g,
-    ''
-  );
-  processed = processed.replace(
-    /\bmocked\s*,\s*/g,
-    ''
-  );
-
-  // 根因 C2 修复：模板字面量中的 :id → 可能被 esbuild 误解析
-  // 将 mockResolvedValue(`...`) 中的模板字面量改为普通字符串
-  // 实际上这个问题很少，暂不处理更复杂的情况
+  // 根据 testRunner 适配 mock API
+  if (testRunner === 'vitest') {
+    // vitest: mocked(await import(...)) → vi.mocked(...)
+    processed = processed.replace(
+      /vi\.mocked\(await\s+import\(['"]([^'"]+)['"]\)\)/g,
+      (_match, _modulePath) => `vi.mocked(readFileContent)`,
+    );
+    // vitest: 独立的 mocked() → vi.mocked()
+    processed = processed.replace(/(?<![.\w])mocked\(/g, 'vi.mocked(');
+    // 移除多余的 mocked import
+    processed = processed.replace(/,\s*mocked\b/g, '');
+    processed = processed.replace(/\bmocked\s*,\s*/g, '');
+  } else if (testRunner === 'jest') {
+    // jest: vi.mock → jest.mock, vi.fn → jest.fn, vi.spyOn → jest.spyOn
+    processed = processed.replace(/\bvi\.mock\(/g, 'jest.mock(');
+    processed = processed.replace(/\bvi\.fn\(/g, 'jest.fn(');
+    processed = processed.replace(/\bvi\.spyOn\(/g, 'jest.spyOn(');
+    processed = processed.replace(/\bvi\.mocked\(/g, 'jest.mocked(');
+    processed = processed.replace(/\bvi\.clearAllMocks\(\)/g, 'jest.clearAllMocks()');
+    processed = processed.replace(/\bvi\.resetAllMocks\(\)/g, 'jest.resetAllMocks()');
+    // jest: import { vi } from 'vitest' → 移除（jest 全局可用）
+    processed = processed.replace(/import\s*\{[^}]*\bvi\b[^}]*\}\s*from\s*['"]vitest['"]\s*;?\n?/g, '');
+  }
+  // mocha: 不做 mock API 转换，mocha 通常配合 sinon 使用
 
   return processed;
 }

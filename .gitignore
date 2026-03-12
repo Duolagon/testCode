@@ -5,3 +5,4 @@ test-results/
 *.tgz
 ai-test-tmp/
 .ai-test-tmp/
+.ai-test-cache.json
